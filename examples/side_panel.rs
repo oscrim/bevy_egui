@@ -17,11 +17,11 @@ struct OriginalCameraTransform(Transform);
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_plugin(EguiPlugin)
+        .add_plugins(EguiPlugin)
         .init_resource::<OccupiedScreenSpace>()
-        .add_startup_system(setup_system)
-        .add_system(ui_example_system)
-        .add_system(update_camera_transform_system)
+        .add_systems(Startup, setup_system)
+        .add_systems(Update, ui_example_system)
+        .add_systems(Update, update_camera_transform_system)
         .run();
 }
 
@@ -75,16 +75,18 @@ fn setup_system(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     commands.spawn(PbrBundle {
-        mesh: meshes.add(Mesh::from(shape::Plane {
-            size: 5.0,
-            subdivisions: 0,
+        mesh: meshes.add(Mesh::from(Plane3d {
+            half_size: Vec2::splat(2.5),
+            normal: Dir3::Y,
         })),
-        material: materials.add(Color::rgb(0.3, 0.5, 0.3).into()),
+        material: materials.add(Color::srgb(0.3, 0.5, 0.3)),
         ..Default::default()
     });
     commands.spawn(PbrBundle {
-        mesh: meshes.add(Mesh::from(shape::Cube { size: 1.0 })),
-        material: materials.add(Color::rgb(0.8, 0.7, 0.6).into()),
+        mesh: meshes.add(Mesh::from(Cuboid {
+            half_size: Vec3::splat(0.5),
+        })),
+        material: materials.add(Color::srgb(0.8, 0.7, 0.6)),
         transform: Transform::from_xyz(0.0, 0.5, 0.0),
         ..Default::default()
     });

@@ -1,5 +1,4 @@
 use bevy::{
-    core_pipeline::clear_color::ClearColorConfig,
     prelude::*,
     render::{
         camera::RenderTarget,
@@ -15,10 +14,9 @@ use egui::Widget;
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_plugin(EguiPlugin)
-        .add_startup_system(setup)
-        .add_system(rotator_system)
-        .add_system(render_to_image_example_system)
+        .add_plugins(EguiPlugin)
+        .add_systems(Startup, setup)
+        .add_systems(Update, (rotator_system, render_to_image_example_system))
         .run();
 }
 
@@ -70,9 +68,11 @@ fn setup(
     egui_user_textures.add_image(image_handle.clone());
     commands.insert_resource(CubePreviewImage(image_handle.clone()));
 
-    let cube_handle = meshes.add(Mesh::from(shape::Cube { size: 4.0 }));
+    let cube_handle = meshes.add(Mesh::from(Cuboid {
+        half_size: Vec3::splat(2.0),
+    }));
     let default_material = StandardMaterial {
-        base_color: Color::rgb(0.8, 0.7, 0.6),
+        base_color: Color::srgb(0.8, 0.7, 0.6),
         reflectance: 0.02,
         unlit: false,
         ..default()
@@ -91,7 +91,7 @@ fn setup(
             ..default()
         })
         .insert(PreviewPassCube)
-        .insert(preview_pass_layer);
+        .insert(preview_pass_layer.clone());
 
     // Light
     // NOTE: Currently lights are shared between passes - see https://github.com/bevyengine/bevy/issues/3462
@@ -103,7 +103,7 @@ fn setup(
     commands
         .spawn(Camera3dBundle {
             camera_3d: Camera3d {
-                clear_color: ClearColorConfig::Custom(Color::rgba(1.0, 1.0, 1.0, 0.0)),
+                // clear_color: ClearColorConfig::Custom(Color::rgba(1.0, 1.0, 1.0, 0.0)),
                 ..default()
             },
             camera: Camera {
@@ -119,7 +119,7 @@ fn setup(
         .insert(preview_pass_layer);
 
     let cube_size = 4.0;
-    let cube_handle = meshes.add(Mesh::from(shape::Box::new(cube_size, cube_size, cube_size)));
+    let cube_handle = meshes.add(Mesh::from(Cuboid::new(cube_size, cube_size, cube_size)));
 
     let main_material_handle = materials.add(default_material);
 
@@ -166,7 +166,7 @@ fn render_to_image_example_system(
             ui.end_row();
 
             ui.label("Emissive:");
-            color_picker_widget(ui, &mut preview_material.emissive);
+            color_picker_widget(ui, &mut preview_material.emissive.into());
             ui.end_row();
 
             ui.label("Perceptual roughness:");
@@ -189,12 +189,15 @@ fn render_to_image_example_system(
         let material_clone = preview_material.clone();
 
         let main_material_handle = main_cube_query.single();
-        let _ = materials.set(main_material_handle, material_clone);
+        // let _ = materials.set(main_material_handle, material_clone);
+        if let Some(material) = materials.get_mut(main_material_handle) {
+            *material = material_clone;
+        }
     }
 }
 
 fn color_picker_widget(ui: &mut egui::Ui, color: &mut Color) -> egui::Response {
-    let [r, g, b, a] = color.as_rgba_f32();
+    let [r, g, b, a] = color.to_srgba().to_f32_array();
     let mut egui_color: egui::Rgba = egui::Rgba::from_srgba_unmultiplied(
         (r * 255.0) as u8,
         (g * 255.0) as u8,
@@ -207,13 +210,12 @@ fn color_picker_widget(ui: &mut egui::Ui, color: &mut Color) -> egui::Response {
         egui::color_picker::Alpha::Opaque,
     );
     let [r, g, b, a] = egui_color.to_srgba_unmultiplied();
-    *color = [
+    *color = Color::Srgba(Srgba::from_f32_array([
         r as f32 / 255.0,
         g as f32 / 255.0,
         b as f32 / 255.0,
         a as f32 / 255.0,
-    ]
-    .into();
+    ]));
     res
 }
 

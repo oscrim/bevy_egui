@@ -3,18 +3,16 @@ use crate::{
     EguiContextQueryReadOnly, EguiManagedTextures, EguiSettings, EguiUserTextures, WindowSize,
 };
 use bevy::{
-    asset::HandleId,
     prelude::*,
     render::{
         render_asset::RenderAssets,
-        render_graph::RenderGraph,
+        render_graph::{RenderGraph, RenderLabel},
         render_resource::{
-            BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, BufferId,
-            CachedRenderPipelineId, DynamicUniformBuffer, PipelineCache, ShaderType,
-            SpecializedRenderPipelines,
+            BindGroup, BindGroupEntry, BindingResource, BufferId, CachedRenderPipelineId,
+            DynamicUniformBuffer, PipelineCache, ShaderType, SpecializedRenderPipelines,
         },
         renderer::{RenderDevice, RenderQueue},
-        texture::Image,
+        texture::{GpuImage, Image},
         view::ExtractedWindows,
         Extract,
     },
@@ -45,7 +43,7 @@ pub struct ExtractedEguiTextures {
 
 impl ExtractedEguiTextures {
     /// Returns an iterator over all textures (both Egui and Bevy managed).
-    pub fn handles(&self) -> impl Iterator<Item = (EguiTextureId, HandleId)> + '_ {
+    pub fn handles(&self) -> impl Iterator<Item = (EguiTextureId, AssetId<Image>)> + '_ {
         self.egui_textures
             .iter()
             .map(|(&(window, texture_id), handle)| {
@@ -59,22 +57,22 @@ impl ExtractedEguiTextures {
     }
 }
 
+#[derive(RenderLabel, Debug, Clone, Hash, PartialEq, Eq)]
+struct EguiRenderLabel(String);
+
 /// Sets up the pipeline for newly created windows.
 pub fn setup_new_windows_render_system(
     windows: Extract<Query<Entity, Added<Window>>>,
     mut render_graph: ResMut<RenderGraph>,
 ) {
     for window in windows.iter() {
-        let egui_pass = format!("egui-{}-{}", window.index(), window.generation());
+        let egui_pass = EguiRenderLabel(format!("egui-{}-{}", window.index(), window.generation()));
 
         let new_node = EguiNode::new(window);
 
         render_graph.add_node(egui_pass.clone(), new_node);
 
-        render_graph.add_node_edge(
-            bevy::render::main_graph::node::CAMERA_DRIVER,
-            egui_pass.to_string(),
-        );
+        render_graph.add_node_edge(bevy::render::graph::CameraDriverLabel, egui_pass);
     }
 }
 
@@ -158,10 +156,12 @@ pub fn prepare_egui_transforms_system(
     egui_transforms.offsets.clear();
 
     for (window, size) in window_sizes.iter() {
-        let offset = egui_transforms.buffer.push(EguiTransform::from_window_size(
-            *size,
-            egui_settings.scale_factor as f32,
-        ));
+        let offset = egui_transforms
+            .buffer
+            .push(&EguiTransform::from_window_size(
+                *size,
+                egui_settings.scale_factor as f32,
+            ));
         egui_transforms.offsets.insert(window, offset);
     }
 
@@ -170,20 +170,22 @@ pub fn prepare_egui_transforms_system(
         .write_buffer(&render_device, &render_queue);
 
     if let Some(buffer) = egui_transforms.buffer.buffer() {
-        match egui_transforms.bind_group {
-            Some((id, _)) if buffer.id() == id => {}
-            _ => {
-                let transform_bind_group = render_device.create_bind_group(&BindGroupDescriptor {
-                    label: Some("egui transform bind group"),
-                    layout: &egui_pipeline.transform_bind_group_layout,
-                    entries: &[BindGroupEntry {
-                        binding: 0,
-                        resource: egui_transforms.buffer.binding().unwrap(),
-                    }],
-                });
-                egui_transforms.bind_group = Some((buffer.id(), transform_bind_group));
-            }
-        };
+        if let EguiPipeline::Done(egui_pipeline) = egui_pipeline.as_ref() {
+            match egui_transforms.bind_group {
+                Some((id, _)) if buffer.id() == id => {}
+                _ => {
+                    let transform_bind_group = render_device.create_bind_group(
+                        Some("egui transform bind group"),
+                        &egui_pipeline.transform_bind_group_layout,
+                        &[BindGroupEntry {
+                            binding: 0,
+                            resource: egui_transforms.buffer.binding().unwrap(),
+                        }],
+                    );
+                    egui_transforms.bind_group = Some((buffer.id(), transform_bind_group));
+                }
+            };
+        }
     }
 }
 
@@ -196,17 +198,20 @@ pub fn queue_bind_groups_system(
     mut commands: Commands,
     egui_textures: Res<ExtractedEguiTextures>,
     render_device: Res<RenderDevice>,
-    gpu_images: Res<RenderAssets<Image>>,
+    gpu_images: Res<RenderAssets<GpuImage>>,
     egui_pipeline: Res<EguiPipeline>,
 ) {
     let bind_groups = egui_textures
         .handles()
         .filter_map(|(texture, handle_id)| {
-            let gpu_image = gpu_images.get(&Handle::weak(handle_id))?;
-            let bind_group = render_device.create_bind_group(&BindGroupDescriptor {
-                label: None,
-                layout: &egui_pipeline.texture_bind_group_layout,
-                entries: &[
+            let gpu_image = gpu_images.get(&Handle::Weak(handle_id))?;
+            let EguiPipeline::Done(egui_pipeline) = egui_pipeline.as_ref() else {
+                return None;
+            };
+            let bind_group = render_device.create_bind_group(
+                None,
+                &egui_pipeline.texture_bind_group_layout,
+                &[
                     BindGroupEntry {
                         binding: 0,
                         resource: BindingResource::TextureView(&gpu_image.texture_view),
@@ -216,7 +221,7 @@ pub fn queue_bind_groups_system(
                         resource: BindingResource::Sampler(&gpu_image.sampler),
                     },
                 ],
-            });
+            );
             Some((texture, bind_group))
         })
         .collect();
