@@ -27,10 +27,10 @@
 //! fn main() {
 //!     App::new()
 //!         .add_plugins(DefaultPlugins)
-//!         .add_plugin(EguiPlugin)
+//!         .add_plugins(EguiPlugin)
 //!         // Systems that create Egui widgets should be run during the `CoreSet::Update` set,
 //!         // or after the `EguiSet::BeginFrame` system (which belongs to the `CoreSet::PreUpdate` set).
-//!         .add_system(ui_example_system)
+//!         .add_systems(Update, ui_example_system)
 //!         .run();
 //! }
 //!
@@ -71,24 +71,23 @@ use crate::{
 #[cfg(all(feature = "manage_clipboard", not(target_arch = "wasm32")))]
 use arboard::Clipboard;
 use bevy::{
-    app::{App, Plugin},
+    app::{App, Last, Plugin, PostUpdate, PreStartup, PreUpdate},
     asset::{AssetEvent, Assets, Handle},
     ecs::{
+        component::Component,
         event::EventReader,
-        query::{QueryEntityError, WorldQuery},
-        schedule::apply_system_buffers,
-        system::{ResMut, SystemParam},
+        query::{QueryData, QueryEntityError},
+        schedule::{apply_deferred, SystemSet},
+        system::{ResMut, Resource, SystemParam},
     },
     input::InputSystem,
     log,
     prelude::{
-        Added, Commands, Component, CoreSet, Deref, DerefMut, Entity, IntoSystemAppConfigs,
-        IntoSystemConfig, IntoSystemConfigs, Query, Resource, Shader, StartupSet, SystemSet, With,
-        Without,
+        Added, Commands, Deref, DerefMut, Entity, IntoSystemConfigs, Query, Shader, With, Without,
     },
     render::{
-        render_resource::SpecializedRenderPipelines, texture::Image, ExtractSchedule, RenderApp,
-        RenderSet,
+        render_resource::SpecializedRenderPipelines, texture::Image, ExtractSchedule, Render,
+        RenderApp, RenderSet,
     },
     utils::HashMap,
     window::{PrimaryWindow, Window},
@@ -114,7 +113,7 @@ pub struct EguiSettings {
     ///
     /// fn update_ui_scale_factor(mut egui_settings: ResMut<EguiSettings>, windows: Query<&Window, With<PrimaryWindow>>) {
     ///     if let Ok(window) = windows.get_single() {
-    ///         egui_settings.scale_factor = 1.0 / window.scale_factor();
+    ///         egui_settings.scale_factor = 1.0 / (window.scale_factor() as f64);
     ///     }
     /// }
     /// ```
@@ -168,6 +167,8 @@ impl EguiClipboard {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn set_contents_impl(&self, contents: &str) {
+        use bevy::log;
+
         if let Some(mut clipboard) = self.get() {
             if let Err(err) = clipboard.set_text(contents.to_owned()) {
                 log::error!("Failed to set clipboard contents: {:?}", err);
@@ -182,6 +183,8 @@ impl EguiClipboard {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn get_contents_impl(&self) -> Option<String> {
+        use bevy::log;
+
         if let Some(mut clipboard) = self.get() {
             match clipboard.get_text() {
                 Ok(contents) => return Some(contents),
@@ -528,7 +531,7 @@ pub enum EguiSet {
 
 impl Plugin for EguiPlugin {
     fn build(&self, app: &mut App) {
-        let world = &mut app.world;
+        let world = app.world_mut();
         world.init_resource::<EguiSettings>();
         world.init_resource::<EguiManagedTextures>();
         #[cfg(feature = "manage_clipboard")]
@@ -537,25 +540,25 @@ impl Plugin for EguiPlugin {
         world.init_resource::<EguiMousePosition>();
         world.insert_resource(LastTouch::default());
 
-        app.add_startup_systems(
+        app.add_systems(
+            PreStartup,
             (
                 setup_new_windows_system,
-                apply_system_buffers,
+                apply_deferred,
                 update_window_contexts_system,
             )
                 .chain()
-                .in_set(EguiStartupSet::InitContexts)
-                .in_base_set(StartupSet::PreStartup),
+                .in_set(EguiStartupSet::InitContexts),
         );
         app.add_systems(
+            PreUpdate,
             (
                 setup_new_windows_system,
-                apply_system_buffers,
+                apply_deferred,
                 update_window_contexts_system,
             )
                 .chain()
-                .in_set(EguiSet::InitContexts)
-                .in_base_set(CoreSet::PreUpdate),
+                .in_set(EguiSet::InitContexts),
         );
 
         #[cfg(target_arch = "wasm32")]
@@ -578,63 +581,71 @@ impl Plugin for EguiPlugin {
             );
         }
 
-        app.add_system(
+        app.add_systems(
+            PreUpdate,
             process_input_system
                 .in_set(EguiSet::ProcessInput)
                 .after(InputSystem)
-                .after(EguiSet::InitContexts)
-                .in_base_set(CoreSet::PreUpdate),
+                .after(EguiSet::InitContexts),
         );
-        app.add_system(
+        app.add_systems(
+            PreUpdate,
             begin_frame_system
                 .in_set(EguiSet::BeginFrame)
-                .after(EguiSet::ProcessInput)
-                .in_base_set(CoreSet::PreUpdate),
+                .after(EguiSet::ProcessInput),
         );
-        app.add_system(
-            process_output_system
-                .in_set(EguiSet::ProcessOutput)
-                .in_base_set(CoreSet::PostUpdate),
+        app.add_systems(
+            PostUpdate,
+            process_output_system.in_set(EguiSet::ProcessOutput),
         );
-        app.add_system(
-            update_egui_textures_system
-                .after(EguiSet::ProcessOutput)
-                .in_base_set(CoreSet::PostUpdate),
+        app.add_systems(
+            PostUpdate,
+            update_egui_textures_system.after(EguiSet::ProcessOutput),
         );
-        app.add_system(free_egui_textures_system.in_base_set(CoreSet::Last));
+        app.add_systems(Last, free_egui_textures_system);
 
-        let mut shaders = app.world.resource_mut::<Assets<Shader>>();
-        shaders.set_untracked(
-            EGUI_SHADER_HANDLE,
-            Shader::from_wgsl(include_str!("egui.wgsl")),
-        );
+        let mut shaders = app.world_mut().resource_mut::<Assets<Shader>>();
+        if let Some(shaders) = shaders.get_mut(EGUI_SHADER_HANDLE.id()) {
+            *shaders = 
+            // shaders.set_untracked(
+            //     EGUI_SHADER_HANDLE,
+                Shader::from_wgsl(include_str!("egui.wgsl"), "egui.wgsl");
+            // );
+        }
 
-        if let Ok(render_app) = app.get_sub_app_mut(RenderApp) {
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app
                 .init_resource::<egui_node::EguiPipeline>()
                 .init_resource::<SpecializedRenderPipelines<EguiPipeline>>()
                 .init_resource::<EguiTransforms>()
                 .add_systems(
+                    ExtractSchedule,
                     (
                         render_systems::extract_egui_render_data_system,
                         render_systems::extract_egui_textures_system,
                         render_systems::setup_new_windows_render_system,
                     )
-                        .into_configs()
-                        .in_schedule(ExtractSchedule),
+                        .into_configs(),
                 )
-                .add_system(
+                .add_systems(
+                    Render,
                     render_systems::prepare_egui_transforms_system.in_set(RenderSet::Prepare),
                 )
-                .add_system(render_systems::queue_bind_groups_system.in_set(RenderSet::Queue))
-                .add_system(render_systems::queue_pipelines_system.in_set(RenderSet::Queue));
+                .add_systems(
+                    Render,
+                    render_systems::queue_bind_groups_system.in_set(RenderSet::Queue),
+                )
+                .add_systems(
+                    Render,
+                    render_systems::queue_pipelines_system.in_set(RenderSet::Queue),
+                );
         }
     }
 }
 
 /// Queries all the Egui related components.
-#[derive(WorldQuery)]
-#[world_query(mutable)]
+#[derive(QueryData)]
+#[query_data(mutable)]
 pub struct EguiContextQuery {
     /// Window entity.
     pub window_entity: Entity,
@@ -651,6 +662,76 @@ pub struct EguiContextQuery {
     /// [`Window`] component.
     pub window: &'static mut Window,
 }
+
+// impl WorldQuery for EguiContextQuery {
+//     type Item<'a> = EguiContextQuery;
+
+//     type Fetch<'a> = WriteFetch<'a>;
+
+//     type State;
+
+//     fn shrink<'wlong: 'wshort, 'wshort>(item: Self::Item<'wlong>) -> Self::Item<'wshort> {
+//         todo!()
+//     }
+
+//     unsafe fn init_fetch<'w>(
+//         world: bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell<'w>,
+//         state: &Self::State,
+//         last_run: bevy::ecs::component::Tick,
+//         this_run: bevy::ecs::component::Tick,
+//     ) -> Self::Fetch<'w> {
+//         todo!()
+//     }
+
+//     const IS_DENSE: bool;
+
+//     unsafe fn set_archetype<'w>(
+//         fetch: &mut Self::Fetch<'w>,
+//         state: &Self::State,
+//         archetype: &'w bevy::ecs::archetype::Archetype,
+//         table: &'w bevy::ecs::storage::Table,
+//     ) {
+//         todo!()
+//     }
+
+//     unsafe fn set_table<'w>(
+//         fetch: &mut Self::Fetch<'w>,
+//         state: &Self::State,
+//         table: &'w bevy::ecs::storage::Table,
+//     ) {
+//         todo!()
+//     }
+
+//     unsafe fn fetch<'w>(
+//         fetch: &mut Self::Fetch<'w>,
+//         entity: Entity,
+//         table_row: bevy::ecs::storage::TableRow,
+//     ) -> Self::Item<'w> {
+//         todo!()
+//     }
+
+//     fn update_component_access(
+//         state: &Self::State,
+//         access: &mut bevy::ecs::query::FilteredAccess<bevy::ecs::component::ComponentId>,
+//     ) {
+//         todo!()
+//     }
+
+//     fn init_state(world: &mut bevy::prelude::World) -> Self::State {
+//         todo!()
+//     }
+
+//     fn get_state(components: &bevy::ecs::component::Components) -> Option<Self::State> {
+//         todo!()
+//     }
+
+//     fn matches_component_set(
+//         state: &Self::State,
+//         set_contains_id: &impl Fn(bevy::ecs::component::ComponentId) -> bool,
+//     ) -> bool {
+//         todo!()
+//     }
+// }
 
 /// Contains textures allocated and painted by Egui.
 #[derive(Resource, Deref, DerefMut, Default)]
@@ -747,15 +828,16 @@ fn free_egui_textures_system(
             if let egui::TextureId::Managed(texture_id) = texture_id {
                 let managed_texture = egui_managed_textures.remove(&(window_id, texture_id));
                 if let Some(managed_texture) = managed_texture {
-                    image_assets.remove(managed_texture.handle);
+                    image_assets.remove(&managed_texture.handle);
                 }
             }
         }
     }
 
-    for image_event in image_events.iter() {
-        if let AssetEvent::Removed { handle } = image_event {
-            egui_user_textures.remove_image(handle);
+    for image_event in image_events.read() {
+        if let AssetEvent::Removed { id } = image_event {
+            let handle = Handle::Weak(*id);
+            egui_user_textures.remove_image(&handle);
         }
     }
 }
@@ -773,7 +855,10 @@ mod tests {
     use super::*;
     use bevy::{
         app::PluginGroup,
-        render::{settings::WgpuSettings, RenderPlugin},
+        render::{
+            settings::{RenderCreation, WgpuSettings},
+            RenderPlugin,
+        },
         winit::WinitPlugin,
         DefaultPlugins,
     };
@@ -789,15 +874,17 @@ mod tests {
             .add_plugins(
                 DefaultPlugins
                     .set(RenderPlugin {
-                        wgpu_settings: WgpuSettings {
+                        render_creation: RenderCreation::Automatic(WgpuSettings {
                             backends: None,
                             ..Default::default()
-                        },
+                        }),
+                        synchronous_pipeline_compilation: false,
+                        // wgpu_settings: ,
                     })
                     .build()
                     .disable::<WinitPlugin>(),
             )
-            .add_plugin(EguiPlugin)
+            .add_plugins(EguiPlugin)
             .update();
     }
 }

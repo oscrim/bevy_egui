@@ -26,7 +26,7 @@ impl FromWorld for Images {
 /// - configuring egui contexts during the startup.
 fn main() {
     let mut app = App::new();
-    app.insert_resource(ClearColor(Color::rgb(0.0, 0.0, 0.0)))
+    app.insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
         .insert_resource(Msaa::Sample4)
         .init_resource::<UiState>()
         .add_plugins(
@@ -34,6 +34,7 @@ fn main() {
                 .set(LogPlugin {
                     filter: "".into(),
                     level: Level::INFO,
+                    custom_layer: |_| None,
                 })
                 .set(WindowPlugin {
                     primary_window: Some(Window {
@@ -44,11 +45,11 @@ fn main() {
                     ..default()
                 }),
         )
-        .add_plugin(EguiPlugin)
-        .add_startup_system(configure_visuals_system)
-        .add_startup_system(configure_ui_state_system)
-        .add_system(update_ui_scale_factor_system)
-        .add_system(ui_example_system);
+        .add_plugins(EguiPlugin)
+        .add_systems(Startup, configure_visuals_system)
+        .add_systems(Startup, configure_ui_state_system)
+        .add_systems(Update, update_ui_scale_factor_system)
+        .add_systems(Update, ui_example_system);
 
     app.run();
 }
@@ -74,7 +75,7 @@ fn configure_ui_state_system(mut ui_state: ResMut<UiState>) {
 }
 
 fn update_ui_scale_factor_system(
-    keyboard_input: Res<Input<KeyCode>>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
     mut toggle_scale_factor: Local<Option<bool>>,
     mut egui_settings: ResMut<EguiSettings>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -88,7 +89,7 @@ fn update_ui_scale_factor_system(
             } else {
                 1.0 / window.scale_factor()
             };
-            egui_settings.scale_factor = scale_factor;
+            egui_settings.scale_factor = scale_factor as f64;
         }
     }
 }

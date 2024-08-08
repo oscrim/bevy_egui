@@ -9,19 +9,16 @@ use bevy::log;
 use bevy::{
     ecs::{
         event::EventWriter,
-        system::{Local, Res, ResMut, SystemParam},
+        system::{Local, Res, ResMut, Resource, SystemParam},
     },
     input::{
-        keyboard::{KeyCode, KeyboardInput},
+        keyboard::{Key, KeyCode, KeyboardInput},
         mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel},
         touch::TouchInput,
-        ButtonState, Input,
+        ButtonInput, ButtonState,
     },
-    prelude::{Entity, EventReader, Query, Resource, Time},
-    window::{
-        CursorEntered, CursorLeft, CursorMoved, ReceivedCharacter, RequestRedraw, WindowCreated,
-        WindowFocused,
-    },
+    prelude::{Entity, EventReader, Query, Time},
+    window::{CursorEntered, CursorLeft, CursorMoved, RequestRedraw, WindowCreated, WindowFocused},
 };
 use egui::Pos2;
 use std::marker::PhantomData;
@@ -34,7 +31,6 @@ pub struct InputEvents<'w, 's> {
     pub ev_cursor: EventReader<'w, 's, CursorMoved>,
     pub ev_mouse_button_input: EventReader<'w, 's, MouseButtonInput>,
     pub ev_mouse_wheel: EventReader<'w, 's, MouseWheel>,
-    pub ev_received_character: EventReader<'w, 's, ReceivedCharacter>,
     pub ev_keyboard_input: EventReader<'w, 's, KeyboardInput>,
     pub ev_window_focused: EventReader<'w, 's, WindowFocused>,
     pub ev_window_created: EventReader<'w, 's, WindowCreated>,
@@ -44,16 +40,15 @@ pub struct InputEvents<'w, 's> {
 impl<'w, 's> InputEvents<'w, 's> {
     /// Consumes all the events.
     pub fn clear(&mut self) {
-        self.ev_touch.iter().last();
-        self.ev_cursor_entered.iter().last();
-        self.ev_cursor_left.iter().last();
-        self.ev_cursor.iter().last();
-        self.ev_mouse_button_input.iter().last();
-        self.ev_mouse_wheel.iter().last();
-        self.ev_received_character.iter().last();
-        self.ev_keyboard_input.iter().last();
-        self.ev_window_focused.iter().last();
-        self.ev_window_created.iter().last();
+        self.ev_touch.read().last();
+        self.ev_cursor_entered.read().last();
+        self.ev_cursor_left.read().last();
+        self.ev_cursor.read().last();
+        self.ev_mouse_button_input.read().last();
+        self.ev_mouse_wheel.read().last();
+        self.ev_keyboard_input.read().last();
+        self.ev_window_focused.read().last();
+        self.ev_window_created.read().last();
     }
 }
 
@@ -69,7 +64,7 @@ pub struct LastTouch {
 pub struct InputResources<'w, 's> {
     #[cfg(feature = "manage_clipboard")]
     pub egui_clipboard: Res<'w, crate::EguiClipboard>,
-    pub keyboard_input: Res<'w, Input<KeyCode>>,
+    pub keyboard_input: Res<'w, ButtonInput<KeyCode>>,
     #[system_param(ignore)]
     _marker: PhantomData<&'s ()>,
 }
@@ -95,11 +90,11 @@ pub fn process_input_system(
 ) {
     // This is a workaround for Windows. For some reason, `WindowFocused` event isn't fired
     // when a window is created.
-    if let Some(event) = input_events.ev_window_created.iter().last() {
+    if let Some(event) = input_events.ev_window_created.read().last() {
         *context_params.focused_window = Some(event.window);
     }
 
-    for event in input_events.ev_window_focused.iter() {
+    for event in input_events.ev_window_focused.read() {
         *context_params.focused_window = if event.focused {
             Some(event.window)
         } else {
@@ -107,14 +102,16 @@ pub fn process_input_system(
         };
     }
 
-    let shift = input_resources.keyboard_input.pressed(KeyCode::LShift)
-        || input_resources.keyboard_input.pressed(KeyCode::RShift);
-    let ctrl = input_resources.keyboard_input.pressed(KeyCode::LControl)
-        || input_resources.keyboard_input.pressed(KeyCode::RControl);
-    let alt = input_resources.keyboard_input.pressed(KeyCode::LAlt)
-        || input_resources.keyboard_input.pressed(KeyCode::RAlt);
-    let win = input_resources.keyboard_input.pressed(KeyCode::LWin)
-        || input_resources.keyboard_input.pressed(KeyCode::RWin);
+    let shift = input_resources.keyboard_input.pressed(KeyCode::ShiftLeft)
+        || input_resources.keyboard_input.pressed(KeyCode::ShiftRight);
+    let ctrl = input_resources.keyboard_input.pressed(KeyCode::ControlLeft)
+        || input_resources
+            .keyboard_input
+            .pressed(KeyCode::ControlRight);
+    let alt = input_resources.keyboard_input.pressed(KeyCode::AltLeft)
+        || input_resources.keyboard_input.pressed(KeyCode::AltRight);
+    let win = input_resources.keyboard_input.pressed(KeyCode::SuperLeft)
+        || input_resources.keyboard_input.pressed(KeyCode::SuperRight);
 
     let mac_cmd = if cfg!(target_os = "macos") {
         win
@@ -132,12 +129,12 @@ pub fn process_input_system(
     };
 
     let mut cursor_left_window = None;
-    if let Some(cursor_left) = input_events.ev_cursor_left.iter().last() {
+    if let Some(cursor_left) = input_events.ev_cursor_left.read().last() {
         cursor_left_window = Some(cursor_left.window);
     }
     let cursor_entered_window = input_events
         .ev_cursor_entered
-        .iter()
+        .read()
         .last()
         .map(|event| event.window);
 
@@ -152,7 +149,7 @@ pub fn process_input_system(
             None
         };
 
-    if let Some(cursor_moved) = input_events.ev_cursor.iter().last() {
+    if let Some(cursor_moved) = input_events.ev_cursor.read().last() {
         // If we've left the window, it's unlikely that we've moved the cursor back to the same
         // window this exact frame, so we are safe to ignore all `CursorMoved` events for the window
         // that has been left.
@@ -182,7 +179,7 @@ pub fn process_input_system(
         if let Ok(mut context) = context_params.contexts.get_mut(window_id) {
             let events = &mut context.egui_input.events;
 
-            for mouse_button_event in input_events.ev_mouse_button_input.iter() {
+            for mouse_button_event in input_events.ev_mouse_button_input.read() {
                 let button = match mouse_button_event.button {
                     MouseButton::Left => Some(egui::PointerButton::Primary),
                     MouseButton::Right => Some(egui::PointerButton::Secondary),
@@ -203,7 +200,7 @@ pub fn process_input_system(
                 }
             }
 
-            for event in input_events.ev_mouse_wheel.iter() {
+            for event in input_events.ev_mouse_wheel.read() {
                 let mut delta = egui::vec2(event.x, event.y);
                 if let MouseScrollUnit::Line = event.unit {
                     // https://github.com/emilk/egui/blob/a689b623a669d54ea85708a8c748eb07e23754b0/egui-winit/src/lib.rs#L449
@@ -226,13 +223,15 @@ pub fn process_input_system(
     }
 
     if !command || cfg!(target_os = "windows") && ctrl && alt {
-        for event in input_events.ev_received_character.iter() {
-            if !event.char.is_control() {
+        // for event in input_events.ev_received_character.read() {
+        //     if !event.char.is_control() {
+        for event in input_events.ev_keyboard_input.read() {
+            if let Key::Character(char) = &event.logical_key {
                 let mut context = context_params.contexts.get_mut(event.window).unwrap();
                 context
                     .egui_input
                     .events
-                    .push(egui::Event::Text(event.char.to_string()));
+                    .push(egui::Event::Text(char.to_string()));
             }
         }
     }
@@ -253,8 +252,8 @@ pub fn process_input_system(
             }
         })
     {
-        for ev in input_events.ev_keyboard_input.iter() {
-            if let Some(key) = ev.key_code.and_then(bevy_to_egui_key) {
+        for ev in input_events.ev_keyboard_input.read() {
+            if let Some(key) = bevy_to_egui_key(ev.key_code) {
                 let pressed = match ev.state {
                     ButtonState::Pressed => true,
                     ButtonState::Released => false,
@@ -289,7 +288,7 @@ pub fn process_input_system(
             }
         }
 
-        for touch in input_events.ev_touch.iter() {
+        for touch in input_events.ev_touch.read() {
             let scale_factor = egui_settings.scale_factor as f32;
             let touch_position: (f32, f32) = (touch.position / scale_factor).into();
 
@@ -301,7 +300,7 @@ pub fn process_input_system(
                     bevy::input::touch::TouchPhase::Started => egui::TouchPhase::Start,
                     bevy::input::touch::TouchPhase::Moved => egui::TouchPhase::Move,
                     bevy::input::touch::TouchPhase::Ended => egui::TouchPhase::End,
-                    bevy::input::touch::TouchPhase::Cancelled => egui::TouchPhase::Cancel,
+                    bevy::input::touch::TouchPhase::Canceled => egui::TouchPhase::Cancel,
                 },
                 pos: egui::pos2(touch_position.0, touch_position.1),
                 force: match touch.force {
@@ -363,7 +362,7 @@ pub fn process_input_system(
                         });
                         focused_input.events.push(egui::Event::PointerGone);
                     }
-                    bevy::input::touch::TouchPhase::Cancelled => {
+                    bevy::input::touch::TouchPhase::Canceled => {
                         context_params.last_touch.id = None;
                         focused_input.events.push(egui::Event::PointerGone);
                     }
@@ -375,7 +374,7 @@ pub fn process_input_system(
     }
 
     for mut context in context_params.contexts.iter_mut() {
-        context.egui_input.predicted_dt = time.raw_delta_seconds();
+        context.egui_input.predicted_dt = time.delta_seconds();
     }
 
     // In some cases, we may skip certain events. For example, we ignore `ReceivedCharacter` events
@@ -473,7 +472,7 @@ pub fn process_output_system(
         set_icon();
 
         if repaint_after.is_zero() {
-            event.send(RequestRedraw)
+            event.send(RequestRedraw);
         }
 
         #[cfg(feature = "open_url")]
@@ -500,7 +499,7 @@ pub fn process_output_system(
 fn egui_to_winit_cursor_icon(cursor_icon: egui::CursorIcon) -> Option<bevy::window::CursorIcon> {
     match cursor_icon {
         egui::CursorIcon::Default => Some(bevy::window::CursorIcon::Default),
-        egui::CursorIcon::PointingHand => Some(bevy::window::CursorIcon::Hand),
+        egui::CursorIcon::PointingHand => Some(bevy::window::CursorIcon::Pointer),
         egui::CursorIcon::ResizeHorizontal => Some(bevy::window::CursorIcon::EwResize),
         egui::CursorIcon::ResizeNeSw => Some(bevy::window::CursorIcon::NeswResize),
         egui::CursorIcon::ResizeNwSe => Some(bevy::window::CursorIcon::NwseResize),
@@ -539,14 +538,14 @@ fn egui_to_winit_cursor_icon(cursor_icon: egui::CursorIcon) -> Option<bevy::wind
 
 fn bevy_to_egui_key(key_code: KeyCode) -> Option<egui::Key> {
     let key = match key_code {
-        KeyCode::Down => egui::Key::ArrowDown,
-        KeyCode::Left => egui::Key::ArrowLeft,
-        KeyCode::Right => egui::Key::ArrowRight,
-        KeyCode::Up => egui::Key::ArrowUp,
+        KeyCode::ArrowDown => egui::Key::ArrowDown,
+        KeyCode::ArrowLeft => egui::Key::ArrowLeft,
+        KeyCode::ArrowRight => egui::Key::ArrowRight,
+        KeyCode::ArrowUp => egui::Key::ArrowUp,
         KeyCode::Escape => egui::Key::Escape,
         KeyCode::Tab => egui::Key::Tab,
-        KeyCode::Back => egui::Key::Backspace,
-        KeyCode::Return => egui::Key::Enter,
+        KeyCode::Backspace => egui::Key::Backspace,
+        KeyCode::Enter => egui::Key::Enter,
         KeyCode::NumpadEnter => egui::Key::Enter,
         KeyCode::Space => egui::Key::Space,
         KeyCode::Insert => egui::Key::Insert,
@@ -555,42 +554,42 @@ fn bevy_to_egui_key(key_code: KeyCode) -> Option<egui::Key> {
         KeyCode::End => egui::Key::End,
         KeyCode::PageUp => egui::Key::PageUp,
         KeyCode::PageDown => egui::Key::PageDown,
-        KeyCode::Numpad0 | KeyCode::Key0 => egui::Key::Num0,
-        KeyCode::Numpad1 | KeyCode::Key1 => egui::Key::Num1,
-        KeyCode::Numpad2 | KeyCode::Key2 => egui::Key::Num2,
-        KeyCode::Numpad3 | KeyCode::Key3 => egui::Key::Num3,
-        KeyCode::Numpad4 | KeyCode::Key4 => egui::Key::Num4,
-        KeyCode::Numpad5 | KeyCode::Key5 => egui::Key::Num5,
-        KeyCode::Numpad6 | KeyCode::Key6 => egui::Key::Num6,
-        KeyCode::Numpad7 | KeyCode::Key7 => egui::Key::Num7,
-        KeyCode::Numpad8 | KeyCode::Key8 => egui::Key::Num8,
-        KeyCode::Numpad9 | KeyCode::Key9 => egui::Key::Num9,
-        KeyCode::A => egui::Key::A,
-        KeyCode::B => egui::Key::B,
-        KeyCode::C => egui::Key::C,
-        KeyCode::D => egui::Key::D,
-        KeyCode::E => egui::Key::E,
-        KeyCode::F => egui::Key::F,
-        KeyCode::G => egui::Key::G,
-        KeyCode::H => egui::Key::H,
-        KeyCode::I => egui::Key::I,
-        KeyCode::J => egui::Key::J,
-        KeyCode::K => egui::Key::K,
-        KeyCode::L => egui::Key::L,
-        KeyCode::M => egui::Key::M,
-        KeyCode::N => egui::Key::N,
-        KeyCode::O => egui::Key::O,
-        KeyCode::P => egui::Key::P,
-        KeyCode::Q => egui::Key::Q,
-        KeyCode::R => egui::Key::R,
-        KeyCode::S => egui::Key::S,
-        KeyCode::T => egui::Key::T,
-        KeyCode::U => egui::Key::U,
-        KeyCode::V => egui::Key::V,
-        KeyCode::W => egui::Key::W,
-        KeyCode::X => egui::Key::X,
-        KeyCode::Y => egui::Key::Y,
-        KeyCode::Z => egui::Key::Z,
+        KeyCode::Numpad0 | KeyCode::Digit0 => egui::Key::Num0,
+        KeyCode::Numpad1 | KeyCode::Digit1 => egui::Key::Num1,
+        KeyCode::Numpad2 | KeyCode::Digit2 => egui::Key::Num2,
+        KeyCode::Numpad3 | KeyCode::Digit3 => egui::Key::Num3,
+        KeyCode::Numpad4 | KeyCode::Digit4 => egui::Key::Num4,
+        KeyCode::Numpad5 | KeyCode::Digit5 => egui::Key::Num5,
+        KeyCode::Numpad6 | KeyCode::Digit6 => egui::Key::Num6,
+        KeyCode::Numpad7 | KeyCode::Digit7 => egui::Key::Num7,
+        KeyCode::Numpad8 | KeyCode::Digit8 => egui::Key::Num8,
+        KeyCode::Numpad9 | KeyCode::Digit9 => egui::Key::Num9,
+        KeyCode::KeyA => egui::Key::A,
+        KeyCode::KeyB => egui::Key::B,
+        KeyCode::KeyC => egui::Key::C,
+        KeyCode::KeyD => egui::Key::D,
+        KeyCode::KeyE => egui::Key::E,
+        KeyCode::KeyF => egui::Key::F,
+        KeyCode::KeyG => egui::Key::G,
+        KeyCode::KeyH => egui::Key::H,
+        KeyCode::KeyI => egui::Key::I,
+        KeyCode::KeyJ => egui::Key::J,
+        KeyCode::KeyK => egui::Key::K,
+        KeyCode::KeyL => egui::Key::L,
+        KeyCode::KeyM => egui::Key::M,
+        KeyCode::KeyN => egui::Key::N,
+        KeyCode::KeyO => egui::Key::O,
+        KeyCode::KeyP => egui::Key::P,
+        KeyCode::KeyQ => egui::Key::Q,
+        KeyCode::KeyR => egui::Key::R,
+        KeyCode::KeyS => egui::Key::S,
+        KeyCode::KeyT => egui::Key::T,
+        KeyCode::KeyU => egui::Key::U,
+        KeyCode::KeyV => egui::Key::V,
+        KeyCode::KeyW => egui::Key::W,
+        KeyCode::KeyX => egui::Key::X,
+        KeyCode::KeyY => egui::Key::Y,
+        KeyCode::KeyZ => egui::Key::Z,
         _ => return None,
     };
     Some(key)
